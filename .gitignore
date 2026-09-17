@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Vercel local metadata
+.vercel/
+
+# Database SQLite lama / data privat
+database/
+backup/
+
+# SQL hasil migrasi berisi kode pemilih, suara, dan audit log
+migration/private_supabase_data.sql
+
+# Upload lokal versi lama
+uploads/
+
+# OS & editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/

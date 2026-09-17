@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+database/
+backup/
+uploads/
+migration/private_supabase_data.sql
+render.yaml
+*.log
+.vscode/

@@ -1,0 +1,25 @@
+{
+  "name": "pilketos",
+  "version": "1.0.0",
+  "description": "Aplikasi PILKETOS berbasis Express, Vercel, dan Supabase",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js && node --check db.js && node --check storage.js && node --check supabase.js",
+    "migrate:sqlite": "node scripts/generate-supabase-migration.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@supabase/supabase-js": "2.116.0",
+    "dotenv": "17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.3.0"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}
