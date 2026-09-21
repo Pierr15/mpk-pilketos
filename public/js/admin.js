@@ -4,22 +4,32 @@ let candidates = [];
 let voterConfig = { roles: [], classes: [], departments: [], codes: [] };
 let editingCandidateId = null;
 
-/* Password disimpan di sessionStorage agar tetap ada selama tab terbuka */
-const SESSION_KEY = "pilketos_admin_pw";
-let sessionPassword = sessionStorage.getItem(SESSION_KEY) || null;
+/* Autentikasi admin memakai session cookie HttpOnly dari server.
+   Password tidak disimpan di storage browser. */
+let adminSessionReady = false;
 
 document.addEventListener("DOMContentLoaded", async function () {
+    if (!(await ensurePassword())) return;
     await loadElectionStatus();
     await loadCandidates();
     updateStatus();
     renderCandidates();
     renderVoterConfig();
-    /* Muat voter config setelah UI sudah tampil — password diminta via modal custom */
     await loadVoterConfig();
     renderVoterConfig();
 });
 
 function goDashboard() { window.location.href = "/"; }
+
+async function logoutAdmin() {
+    try {
+        await fetch("/api/admin/logout", { method: "POST" });
+    } catch (_) {
+        /* Tetap arahkan ke login walau request logout gagal. */
+    }
+    adminSessionReady = false;
+    window.location.href = "/admin-login.html";
+}
 
 async function loadElectionStatus() {
     try {
@@ -58,13 +68,14 @@ async function loadCandidates() {
 }
 
 async function loadVoterConfig() {
-    const pw = await ensurePassword();
-    if (!pw) return;
+    if (!(await ensurePassword())) return;
     try {
-        const r = await fetch("/api/admin/voter-config", {
-            cache: "no-store",
-            headers: { "x-admin-password": pw }
-        });
+        const r = await fetch("/api/admin/voter-config", { cache: "no-store" });
+        if (r.status === 401) {
+            adminSessionReady = false;
+            window.location.href = "/admin-login.html";
+            return;
+        }
         const d = await r.json();
         if (!d.success) throw new Error(d.message);
         voterConfig.roles = d.roles || [];
@@ -73,25 +84,24 @@ async function loadVoterConfig() {
         voterConfig.codes = d.codes || [];
     } catch (e) {
         console.error(e);
-        if (String(e.message).includes("401") || String(e.message).includes("Password")) {
-            sessionPassword = null;
-            try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
-        }
         toast(e.message || "Gagal memuat konfigurasi pemilih.", "error");
     }
 }
 
 async function ensurePassword() {
-    if (sessionPassword) return sessionPassword;
-
-    /* Pakai modal custom, bukan prompt() native */
-    const pw = await appPromptPassword();
-    if (!pw) return null;
-
-    /* appPromptPassword sudah verifikasi ke server — tinggal simpan */
-    sessionPassword = pw;
-    try { sessionStorage.setItem(SESSION_KEY, pw); } catch (e) { /* private mode */ }
-    return pw;
+    if (adminSessionReady) return "session";
+    try {
+        const r = await fetch("/api/admin/session", { cache: "no-store" });
+        if (r.ok) {
+            adminSessionReady = true;
+            return "session";
+        }
+    } catch (e) {
+        console.error(e);
+    }
+    adminSessionReady = false;
+    window.location.href = "/admin-login.html";
+    return null;
 }
 
 async function verifyAdminPassword(pw) {
@@ -110,12 +120,17 @@ async function verifyAdminPassword(pw) {
 
 async function adminRequest(url, method, body, pw) {
     const headers = { "Content-Type": "application/json" };
-    if (pw) headers["x-admin-password"] = pw;
+    if (pw && pw !== "session") headers["x-admin-password"] = pw;
     const r = await fetch(url, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body)
     });
+    if (r.status === 401) {
+        adminSessionReady = false;
+        window.location.href = "/admin-login.html";
+        throw new Error("Sesi administrator berakhir. Silakan login kembali.");
+    }
     if (!r.headers.get("content-type")?.includes("application/json"))
         throw new Error("Bukan JSON. Buka via http://localhost:3000.");
     const d = await r.json();
@@ -267,8 +282,7 @@ async function submitUnlock() {
     try {
         await adminRequest("/api/election/unlock", "POST", {}, pw);
         electionStatus = "DRAFT";
-        sessionPassword = pw;
-        try { sessionStorage.setItem(SESSION_KEY, pw); } catch (_) {}
+        adminSessionReady = true;
         updateStatus();
         closeUnlockModal();
         toast("Konfigurasi terbuka kembali. Status sekarang DRAFT.", "success");
@@ -867,10 +881,9 @@ function openGenerateModal() {
         roleEl.value = "";
     }
 
-    /* Populate kelas dropdown */
     const classEl = document.getElementById("genClass");
     if (classEl) {
-        classEl.innerHTML = '<option value="">Pilih Kelas</option><option value="ALL">— Semua Kelas (10 + 11 + 12) —</option>';
+        classEl.innerHTML = '<option value="">Pilih Kelas</option>';
         voterConfig.classes.forEach(function (cl) {
             const o = document.createElement("option");
             o.value = cl.id;
@@ -880,7 +893,6 @@ function openGenerateModal() {
         classEl.value = "";
     }
 
-    /* Sembunyikan kelas dulu */
     const classGroup = document.getElementById("genClassGroup");
     if (classGroup) classGroup.style.display = "none";
 
@@ -906,22 +918,12 @@ function onGenRoleChange() {
         const classEl = document.getElementById("genClass");
         if (classEl) classEl.value = "";
     }
-    /* Update hint jumlah kode */
-    const classEl = document.getElementById("genClass");
-    const hint = document.getElementById("genAmountHint");
-    if (hint && classEl && classEl.value === "ALL") {
-        hint.textContent = "(per kelas × 3 kelas)";
-    } else if (hint) {
-        hint.textContent = "";
-    }
     _updateGenAmountHint();
 }
 
 function _updateGenAmountHint() {
-    const classEl = document.getElementById("genClass");
     const hint = document.getElementById("genAmountHint");
-    if (!hint || !classEl) return;
-    hint.textContent = classEl.value === "ALL" ? "(jumlah ini × 3 kelas)" : "";
+    if (hint) hint.textContent = "";
 }
 
 function closeGenerateModal() {
@@ -943,34 +945,25 @@ async function submitGenerateCodes() {
     const role = voterConfig.roles.find(function (r) { return String(r.id) === String(roleId); });
     if (!role) { toast("Jenis pemilih tidak ditemukan.", "error"); return; }
 
-    /* Kelas wajib untuk SISWA */
     const isSiswa = role.name === "SISWA";
-    if (isSiswa && !classId) { toast("Pilih kelas untuk pemilih Siswa.", "error"); return; }
+    if (isSiswa && !classId) { toast("Pilih satu kelas untuk pemilih Siswa.", "error"); return; }
 
     if (!Number.isInteger(amount) || amount < 1 || amount > 5000) {
         toast("Jumlah kode harus antara 1 sampai 5000.", "error");
         return;
     }
 
-    const isAllClass = classId === "ALL";
-
-    /* Siapkan daftar kelas yang akan di-generate */
-    let classTargets = [];
-    if (isSiswa && isAllClass) {
-        classTargets = voterConfig.classes.map(function (c) { return { id: c.id, name: c.name }; });
-    } else if (isSiswa && classId) {
-        const classObj = voterConfig.classes.find(function (c) { return String(c.id) === String(classId); });
-        if (classObj) classTargets = [{ id: classObj.id, name: classObj.name }];
+    let classObj = null;
+    if (isSiswa) {
+        classObj = voterConfig.classes.find(function (item) {
+            return String(item.id) === String(classId);
+        });
+        if (!classObj) { toast("Kelas tidak ditemukan.", "error"); return; }
     }
 
-    const labelKelas = isAllClass
-        ? ` — Semua Kelas (${voterConfig.classes.map(function(c){return c.name;}).join(", ")})`
-        : (classTargets.length ? ` — ${classTargets[0].name}` : "");
-
-    const totalKode = isSiswa ? amount * classTargets.length : amount;
-
+    const labelKelas = classObj ? ` — ${classObj.name}` : "";
     const ok = await appConfirm(
-        `Akan dibuat ${isSiswa && isAllClass ? `${amount} kode × ${classTargets.length} kelas = ${totalKode} kode total` : `${amount} kode`} untuk ${role.name}${labelKelas}.\n\nSetiap kode hanya dapat digunakan satu kali.`,
+        `Akan dibuat ${amount} kode untuk ${role.name}${labelKelas}.\n\nSetiap kode hanya dapat digunakan satu kali.`,
         { title: "Generate Kode Pemilih?", okLabel: "GENERATE", danger: false, icon: "✦" }
     );
     if (!ok) return;
@@ -979,30 +972,13 @@ async function submitGenerateCodes() {
     if (!pw) return;
 
     try {
-        if (isSiswa && isAllClass) {
-            /* Generate per kelas satu per satu */
-            let totalGenerated = 0;
-            for (const cls of classTargets) {
-                const data = await adminRequest("/api/admin/voter-codes/generate", "POST", {
-                    roleId: Number(roleId),
-                    classId: cls.id,
-                    amount
-                }, pw);
-                totalGenerated += data.amount || amount;
-            }
-            closeGenerateModal();
-            await loadVoterConfig();
-            renderCodes();
-            toast(`${totalGenerated} kode berhasil dibuat untuk semua kelas.`, "success");
-        } else {
-            const body = { roleId: Number(roleId), amount };
-            if (isSiswa && classId) body.classId = Number(classId);
-            const data = await adminRequest("/api/admin/voter-codes/generate", "POST", body, pw);
-            closeGenerateModal();
-            await loadVoterConfig();
-            renderCodes();
-            toast(`${data.amount || amount} kode berhasil dibuat.`, "success");
-        }
+        const body = { roleId: Number(roleId), amount };
+        if (isSiswa) body.classId = Number(classId);
+        const data = await adminRequest("/api/admin/voter-codes/generate", "POST", body, pw);
+        closeGenerateModal();
+        await loadVoterConfig();
+        renderCodes();
+        toast(`${data.amount || amount} kode berhasil dibuat.`, "success");
     } catch (e) { toast(e.message || "Gagal membuat kode.", "error"); }
 }
 
