@@ -34,6 +34,7 @@ const ADMIN_SESSION_SECRET_RAW =
 
 const ROOT_DIR   = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
+const PRIVATE_DIR = path.join(ROOT_DIR, "private");
 
 // ─────────────────────────────────────────────
 //  UPLOAD FILE (foto paslon & hero)
@@ -281,7 +282,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.get(["/admin", "/admin.html"], (req, res) => {
     if (!getAdminSession(req)) return res.redirect(302, "/admin-login.html");
     res.setHeader("Cache-Control", "no-store");
-    res.sendFile(path.join(PUBLIC_DIR, "admin.html"));
+    res.sendFile(path.join(PRIVATE_DIR, "admin.html"));
 });
 
 app.get(["/admin-login", "/admin-login.html"], (req, res) => {
