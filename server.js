@@ -25,6 +25,13 @@ const ADMIN_PASSWORD_HASH = crypto
     .update(ADMIN_PASSWORD_RAW)
     .digest();
 
+const ADMIN_SESSION_COOKIE = "pilketos_admin_session";
+const ADMIN_SESSION_TTL = 8 * 60 * 60 * 1000; // 8 jam
+const ADMIN_SESSION_SECRET_RAW =
+    process.env.ADMIN_SESSION_SECRET ||
+    process.env.VOTE_TOKEN_SECRET ||
+    ADMIN_PASSWORD_RAW;
+
 const ROOT_DIR   = __dirname;
 const PUBLIC_DIR = path.join(ROOT_DIR, "public");
 
@@ -120,14 +127,88 @@ function checkAdminPassword(req) {
     } catch { return false; }
 }
 
+function parseCookies(req) {
+    const raw = String(req.headers.cookie || "");
+    const out = {};
+    for (const part of raw.split(";")) {
+        const idx = part.indexOf("=");
+        if (idx <= 0) continue;
+        const key = part.slice(0, idx).trim();
+        const value = part.slice(idx + 1).trim();
+        if (!key) continue;
+        try { out[key] = decodeURIComponent(value); }
+        catch { out[key] = value; }
+    }
+    return out;
+}
+
+function signAdminSessionPayload(encodedPayload) {
+    return crypto
+        .createHmac("sha256", ADMIN_SESSION_SECRET_RAW)
+        .update(encodedPayload)
+        .digest("base64url");
+}
+
+function createAdminSessionToken() {
+    const payload = {
+        v: 1,
+        iat: Date.now(),
+        exp: Date.now() + ADMIN_SESSION_TTL
+    };
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    return `${encoded}.${signAdminSessionPayload(encoded)}`;
+}
+
+function verifyAdminSessionToken(token) {
+    try {
+        const [encoded, signature, extra] = String(token || "").split(".");
+        if (!encoded || !signature || extra !== undefined) return null;
+
+        const expected = Buffer.from(signAdminSessionPayload(encoded));
+        const actual = Buffer.from(signature);
+        if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
+
+        const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+        if (payload.v !== 1 || !Number.isFinite(payload.exp) || Date.now() > payload.exp) return null;
+        return payload;
+    } catch {
+        return null;
+    }
+}
+
+function getAdminSession(req) {
+    const token = parseCookies(req)[ADMIN_SESSION_COOKIE];
+    return verifyAdminSessionToken(token);
+}
+
+function setAdminSessionCookie(res) {
+    const token = createAdminSessionToken();
+    const secure = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+    const maxAge = Math.floor(ADMIN_SESSION_TTL / 1000);
+    res.setHeader(
+        "Set-Cookie",
+        `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure ? "; Secure" : ""}`
+    );
+}
+
+function clearAdminSessionCookie(res) {
+    const secure = process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+    res.setHeader(
+        "Set-Cookie",
+        `${ADMIN_SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? "; Secure" : ""}`
+    );
+}
+
 async function requireAdmin(req, res, next) {
+    if (getAdminSession(req)) return next();
+
     const ip = getIp(req);
     if (!loginRL.check(ip)) {
         return res.status(429).json({ success: false, message: "Terlalu banyak percobaan. Coba beberapa menit lagi." });
     }
     if (!checkAdminPassword(req)) {
         loginRL.fail(ip);
-        return res.status(401).json({ success: false, message: "Password administrator tidak valid." });
+        return res.status(401).json({ success: false, message: "Sesi administrator tidak valid." });
     }
     loginRL.clear(ip);
     next();
@@ -195,6 +276,20 @@ function verifyVoteToken(token) {
 // ─────────────────────────────────────────────
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+/* Halaman admin tidak pernah dikirim sebelum session cookie valid. */
+app.get(["/admin", "/admin.html"], (req, res) => {
+    if (!getAdminSession(req)) return res.redirect(302, "/admin-login.html");
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(path.join(PUBLIC_DIR, "admin.html"));
+});
+
+app.get(["/admin-login", "/admin-login.html"], (req, res) => {
+    if (getAdminSession(req)) return res.redirect(302, "/admin.html");
+    res.setHeader("Cache-Control", "no-store");
+    res.sendFile(path.join(PUBLIC_DIR, "admin-login.html"));
+});
+
 app.use(express.static(PUBLIC_DIR, {
     setHeaders(res, fp) {
         if ([".js", ".css", ".html"].some(e => fp.endsWith(e))) res.setHeader("Cache-Control", "no-store");
@@ -231,7 +326,6 @@ async function audit(action, detail, rows, req) {
 //  ROUTES — HALAMAN STATIS
 // ─────────────────────────────────────────────
 app.get("/",             (req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
-app.get("/admin.html",   (req, res) => res.sendFile(path.join(PUBLIC_DIR, "admin.html")));
 app.get("/vote.html",    (req, res) => res.sendFile(path.join(PUBLIC_DIR, "vote.html")));
 app.get("/results.html", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "results.html")));
 
@@ -364,6 +458,38 @@ app.post("/api/vote", async (req, res) => {
 // ─────────────────────────────────────────────
 //  ADMIN — AUTH
 // ─────────────────────────────────────────────
+app.get("/api/admin/session", (req, res) => {
+    if (!getAdminSession(req)) {
+        return res.status(401).json({ success: false, authenticated: false });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, authenticated: true });
+});
+
+app.post("/api/admin/login", async (req, res) => {
+    const ip = getIp(req);
+    if (!loginRL.check(ip)) {
+        return res.status(429).json({ success: false, message: "Terlalu banyak percobaan. Coba beberapa menit lagi." });
+    }
+    if (!checkAdminPassword(req)) {
+        loginRL.fail(ip);
+        await audit("LOGIN_FAIL", "admin login page", 0, req);
+        return res.status(401).json({ success: false, message: "Password administrator salah." });
+    }
+
+    loginRL.clear(ip);
+    setAdminSessionCookie(res);
+    await audit("LOGIN_SUCCESS", "admin login page", 1, req);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, message: "Login berhasil." });
+});
+
+app.post("/api/admin/logout", (req, res) => {
+    clearAdminSessionCookie(res);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ success: true, message: "Logout berhasil." });
+});
+
 app.post("/api/admin/verify", async (req, res) => {
     const ip = getIp(req);
     if (!loginRL.check(ip)) return res.status(429).json({ success: false, message: "Terlalu banyak percobaan." });
@@ -712,21 +838,29 @@ app.delete("/api/admin/voter-departments/:id", requireAdmin, requireDraft, async
 // ─────────────────────────────────────────────
 app.post("/api/admin/voter-codes/generate", requireAdmin, requireDraft, async (req, res) => {
     try {
-        const roleId  = Number(req.body.role_id ?? req.body.roleId);
-        const classId = req.body.classId ? Number(req.body.classId) : null;
-        const amount  = Number(req.body.amount ?? req.body.quantity ?? req.body.count);
+        const roleId = Number(req.body.role_id ?? req.body.roleId);
+        const rawClassId = req.body.class_id ?? req.body.classId;
+        const classId = rawClassId === undefined || rawClassId === null || rawClassId === ""
+            ? null
+            : Number(rawClassId);
+        const amount = Number(req.body.amount ?? req.body.quantity ?? req.body.count);
 
         if (!Number.isInteger(roleId) || roleId <= 0) return res.status(400).json({ success: false, message: "Jenis pemilih wajib dipilih." });
         if (!Number.isInteger(amount) || amount < 1 || amount > 5000) return res.status(400).json({ success: false, message: "Jumlah kode harus 1–5000." });
+        if (classId !== null && (!Number.isInteger(classId) || classId <= 0)) {
+            return res.status(400).json({ success: false, message: "Kelas tidak valid. Pilih satu kelas spesifik." });
+        }
 
         const role = await db.getRoleById(roleId);
         if (!role) return res.status(404).json({ success: false, message: "Jenis pemilih tidak ditemukan." });
         if (!role.active) return res.status(400).json({ success: false, message: "Jenis pemilih tidak aktif." });
 
-        if (classId) {
+        if (role.name === "SISWA" && classId === null) {
+            return res.status(400).json({ success: false, message: "Kelas wajib dipilih untuk SISWA." });
+        }
+        if (classId !== null) {
             if (!await db.getClassById(classId)) return res.status(404).json({ success: false, message: "Kelas tidak ditemukan." });
         }
-        if (role.name === "SISWA" && !classId) return res.status(400).json({ success: false, message: "Kelas wajib dipilih untuk SISWA." });
 
         const existingSet = await db.getAllExistingCodes();
         const rows = [];
