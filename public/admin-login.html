@@ -109,12 +109,37 @@
             top: 50%;
             right: 9px;
             transform: translateY(-50%);
+            display: grid;
+            place-items: center;
+            width: 34px;
+            height: 34px;
             border: 0;
+            border-radius: 7px;
             background: transparent;
             color: var(--muted);
             cursor: pointer;
-            font: 700 11px var(--font-body);
-            padding: 7px;
+            padding: 0;
+            transition: color .18s, background .18s, box-shadow .18s;
+        }
+
+        .toggle-password:hover {
+            background: rgba(46, 86, 166, 0.08);
+            color: var(--navy-700);
+        }
+
+        .toggle-password:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(46, 86, 166, 0.16);
+        }
+
+        .toggle-password svg {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
         }
 
         .login-button {
@@ -205,8 +230,22 @@
                         autofocus
                         placeholder="Masukkan password"
                     >
-                    <button type="button" class="toggle-password" id="togglePassword" aria-label="Tampilkan password">
-                        LIHAT
+                    <button
+                        type="button"
+                        class="toggle-password"
+                        id="togglePassword"
+                        aria-label="Tampilkan password"
+                        aria-pressed="false"
+                    >
+                        <svg class="icon-eye" aria-hidden="true" viewBox="0 0 24 24">
+                            <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                            <circle cx="12" cy="12" r="2.75"></circle>
+                        </svg>
+                        <svg class="icon-eye-off" aria-hidden="true" viewBox="0 0 24 24" hidden>
+                            <path d="M3 3l18 18"></path>
+                            <path d="M10.6 6.15A10.7 10.7 0 0 1 12 6c6 0 9.5 6 9.5 6a17.6 17.6 0 0 1-2.15 2.8M6.2 6.2C3.8 7.85 2.5 12 2.5 12s3.5 6 9.5 6a9.8 9.8 0 0 0 3.05-.48"></path>
+                            <path d="M9.95 9.95a2.9 2.9 0 0 0-.7 2.05A2.75 2.75 0 0 0 12 14.75c.8 0 1.52-.34 2.02-.88"></path>
+                        </svg>
                     </button>
                 </div>
 
@@ -226,6 +265,8 @@
         const button = document.getElementById("loginButton");
         const errorBox = document.getElementById("loginError");
         const toggle = document.getElementById("togglePassword");
+        const eyeIcon = toggle.querySelector(".icon-eye");
+        const eyeOffIcon = toggle.querySelector(".icon-eye-off");
 
         function showError(message) {
             errorBox.textContent = message || "Login gagal.";
@@ -235,8 +276,10 @@
         toggle.addEventListener("click", function () {
             const show = input.type === "password";
             input.type = show ? "text" : "password";
-            toggle.textContent = show ? "SEMBUNYIKAN" : "LIHAT";
             toggle.setAttribute("aria-label", show ? "Sembunyikan password" : "Tampilkan password");
+            toggle.setAttribute("aria-pressed", String(show));
+            eyeIcon.hidden = show;
+            eyeOffIcon.hidden = !show;
             input.focus();
         });
 
