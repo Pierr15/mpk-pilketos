@@ -3,6 +3,7 @@ let publishedState = false;
 let candidates = [];
 let voterConfig = { roles: [], classes: [], departments: [], codes: [] };
 let editingCandidateId = null;
+const MAX_GENERATE_CODES = 10000;
 
 /* Autentikasi admin memakai session cookie HttpOnly dari server.
    Password tidak disimpan di storage browser. */
@@ -948,8 +949,8 @@ async function submitGenerateCodes() {
     const isSiswa = role.name === "SISWA";
     if (isSiswa && !classId) { toast("Pilih satu kelas untuk pemilih Siswa.", "error"); return; }
 
-    if (!Number.isInteger(amount) || amount < 1 || amount > 5000) {
-        toast("Jumlah kode harus antara 1 sampai 5000.", "error");
+    if (!Number.isInteger(amount) || amount < 1 || amount > MAX_GENERATE_CODES) {
+        toast(`Jumlah kode harus antara 1 sampai ${MAX_GENERATE_CODES}.`, "error");
         return;
     }
 

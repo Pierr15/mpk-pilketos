@@ -8,6 +8,26 @@
 
 const supabase = require("./supabase");
 
+const READ_PAGE_SIZE = 1000;
+const INSERT_BATCH_SIZE = 500;
+
+async function readAllPages(buildQuery, label) {
+    const rows = [];
+    let from = 0;
+
+    while (true) {
+        const page = check(
+            await buildQuery().range(from, from + READ_PAGE_SIZE - 1),
+            label
+        );
+        if (!page.length) break;
+        rows.push(...page);
+        from += page.length;
+    }
+
+    return rows;
+}
+
 // ─────────────────────────────────────────────
 //  HELPER: error check
 // ─────────────────────────────────────────────
@@ -241,8 +261,8 @@ async function deptIsUsed(id) {
 //  VOTER CODES
 // ─────────────────────────────────────────────
 async function getCodesWithMeta() {
-    return check(
-        await supabase
+    return readAllPages(
+        () => supabase
             .from("voter_codes")
             .select(`
                 id, code, used, created_at, used_at,
@@ -257,8 +277,8 @@ async function getCodesWithMeta() {
 }
 
 async function getAllExistingCodes() {
-    const data = check(
-        await supabase.from("voter_codes").select("code"),
+    const data = await readAllPages(
+        () => supabase.from("voter_codes").select("code").order("id"),
         "getAllExistingCodes"
     );
     return new Set(data.map(r => r.code));
@@ -266,10 +286,12 @@ async function getAllExistingCodes() {
 
 async function insertCodes(rows) {
     // rows = [{ code, role_id, class_id, department_id }]
-    check(
-        await supabase.from("voter_codes").insert(rows),
-        "insertCodes"
-    );
+    for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
+        check(
+            await supabase.from("voter_codes").insert(rows.slice(i, i + INSERT_BATCH_SIZE)),
+            "insertCodes"
+        );
+    }
 }
 
 async function getCodeByString(code) {

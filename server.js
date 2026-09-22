@@ -14,6 +14,7 @@ const media   = require("./storage");
 // ─────────────────────────────────────────────
 const app  = express();
 const PORT = process.env.PORT || 3000;
+const MAX_GENERATE_CODES = 10000;
 
 /* Password admin — wajib ada */
 const ADMIN_PASSWORD_RAW = process.env.ADMIN_PASSWORD;
@@ -847,7 +848,9 @@ app.post("/api/admin/voter-codes/generate", requireAdmin, requireDraft, async (r
         const amount = Number(req.body.amount ?? req.body.quantity ?? req.body.count);
 
         if (!Number.isInteger(roleId) || roleId <= 0) return res.status(400).json({ success: false, message: "Jenis pemilih wajib dipilih." });
-        if (!Number.isInteger(amount) || amount < 1 || amount > 5000) return res.status(400).json({ success: false, message: "Jumlah kode harus 1–5000." });
+        if (!Number.isInteger(amount) || amount < 1 || amount > MAX_GENERATE_CODES) {
+            return res.status(400).json({ success: false, message: `Jumlah kode harus 1–${MAX_GENERATE_CODES}.` });
+        }
         if (classId !== null && (!Number.isInteger(classId) || classId <= 0)) {
             return res.status(400).json({ success: false, message: "Kelas tidak valid. Pilih satu kelas spesifik." });
         }
